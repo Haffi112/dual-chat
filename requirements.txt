@@ -1,0 +1,13 @@
+Flask
+Flask-SQLAlchemy
+SQLAlchemy
+Werkzeug
+python-dotenv
+openai
+gunicorn
+psycopg2-binary
+bleach
+Flask-Migrate
+markdown
+markupsafe
+requests

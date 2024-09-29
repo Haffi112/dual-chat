@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto bg-white p-8 rounded-lg shadow-md flex flex-col h-full">
+    <h1 class="text-3xl font-bold mb-6 text-center text-gray-800">Spjallaðu við gervigreind í þróun</h1>
+    <div class="flex space-x-4">
+        <!-- Left Chat -->
+        <div class="w-1/2">
+            <h2 class="text-xl font-semibold mb-2">Llama 3.2 3B</h2>
+            <div id="chat-container-1" class="mb-6 overflow-y-auto bg-gray-100 p-4 rounded-lg h-96">
+                {% for chat in chats %}
+                    <!-- Existing chat messages code -->
+                {% endfor %}
+            </div>
+        </div>
+        <!-- Right Chat -->
+        <div class="w-1/2">
+            <h2 class="text-xl font-semibold mb-2">TrustLLM 2.2B</h2>
+            <div id="chat-container-2" class="mb-6 overflow-y-auto bg-gray-100 p-4 rounded-lg h-96">
+                <!-- Chat 2 messages will be dynamically added here -->
+            </div>
+        </div>
+    </div>
+    <form id="chat-form" class="flex mb-4">
+        <input type="text" id="prompt" name="prompt" required class="flex-grow px-4 py-2 border border-gray-300 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <button type="submit" class="bg-blue-500 text-white px-6 py-2 rounded-r-lg hover:bg-blue-600 transition duration-200">Senda</button>
+    </form>
+    <button id="reset-btn" class="w-full bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition duration-200">Byrja upp á nýtt</button>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const chatForm = document.getElementById('chat-form');
+    const chatContainer1 = document.getElementById('chat-container-1');
+    const chatContainer2 = document.getElementById('chat-container-2');
+    const resetBtn = document.getElementById('reset-btn');
+
+    const emojis = ['👍', '👎', '😊', '🤔', '😮', '❤️', '😂', '🎉', '👏', '🙏'];
+
+    // Set up marked options
+    marked.setOptions({
+        breaks: true,
+        sanitize: false
+    });
+
+    let chatHistory1 = [];
+    let chatHistory2 = [];
+
+    chatForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const prompt = document.getElementById('prompt').value;
+        appendMessage('user', prompt, chatContainer1);
+        appendMessage('user', prompt, chatContainer2);
+        
+        const aiMessageId1 = 'ai-message-1-' + Date.now();
+        const aiMessageId2 = 'ai-message-2-' + Date.now();
+        appendMessage('ai', '...', chatContainer1, aiMessageId1);
+        appendMessage('ai', '...', chatContainer2, aiMessageId2);
+        
+        // Chat 1 (Left)
+        const eventSource1 = new EventSource('/submit?prompt=' + encodeURIComponent(prompt) + '&history=' + encodeURIComponent(JSON.stringify(chatHistory1)));
+        let aiResponse1 = '';
+        eventSource1.onmessage = function(event) {
+            if (event.data.startsWith("[DONE]")) {
+                eventSource1.close();
+                const aiChatId = event.data.split("[DONE]")[1];
+                updateAIMessage(aiMessageId1, aiResponse1, true, aiChatId, chatContainer1, "Llama 3.2 3B");
+                chatHistory1.push({role: 'user', content: prompt});
+                chatHistory1.push({role: 'assistant', content: aiResponse1});
+            } else {
+                aiResponse1 += event.data;
+                updateAIMessage(aiMessageId1, aiResponse1, false, null, chatContainer1);
+            }
+        };
+
+        // Chat 2 (Right)
+        fetch('/submit_chat2', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                prompt: prompt,
+                history: chatHistory2
+            }),
+        })
+        .then(response => response.json())
+        .then(data => {
+            updateAIMessage(aiMessageId2, data.response, true, null, chatContainer2, "TrustLLM 2.2B");
+            chatHistory2.push({role: 'user', content: prompt});
+            chatHistory2.push({role: 'assistant', content: data.response});
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            updateAIMessage(aiMessageId2, "Error: Failed to get response from server.", true, null, chatContainer2);
+        });
+
+        document.getElementById('prompt').value = '';
+    });
+
+    resetBtn.addEventListener('click', function() {
+        fetch('/reset', { method: 'POST' })
+        .then(() => {
+            chatContainer1.innerHTML = '';
+            chatContainer2.innerHTML = '';
+            chatHistory1 = [];
+            chatHistory2 = [];
+        });
+    });
+
+    function appendMessage(role, content, container, messageId = null, chatId = null, aiModel = null) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `chat ${role === 'user' ? 'chat-end' : 'chat-start'} mb-4`;
+        if (messageId) {
+            messageDiv.id = messageId;
+        }
+        if (chatId) {
+            messageDiv.dataset.chatId = chatId;
+        }
+        const renderedContent = role === 'ai' ? marked.parse(content) : escapeHtml(content);
+        messageDiv.innerHTML = `
+            <div class="chat-bubble ${role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'} shadow-md whitespace-pre-wrap break-words">
+                ${renderedContent}
+            </div>
+            ${role === 'ai' ? `
+                <div class="chat-footer mt-2 flex flex-wrap justify-start">
+                    ${emojis.map(emoji => `
+                        <button class="emoji-reaction mr-2 mb-2 p-1 rounded hover:bg-gray-200" data-emoji="${emoji}">${emoji}</button>
+                    `).join('')}
+                </div>
+            ` : ''}
+        `;
+        container.appendChild(messageDiv);
+        container.scrollTop = container.scrollHeight;
+
+        if (role === 'ai') {
+            const emojiButtons = messageDiv.querySelectorAll('.emoji-reaction');
+            emojiButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    const emoji = this.dataset.emoji;
+                    const chatId = messageDiv.dataset.chatId;
+                    fetch('/react', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: new URLSearchParams({
+                            'chat_id': chatId,
+                            'emoji': emoji,
+                            'is_ai_message': 'true'
+                        })
+                    });
+                    this.classList.add('bg-gray-300');
+                });
+            });
+        }
+    }
+
+    function updateAIMessage(messageId, content, isFinal = false, chatId = null, container, aiModel = null) {
+        const messageDiv = container.querySelector('#' + messageId);
+        if (messageDiv && messageDiv.querySelector('.chat-bubble')) {
+            const chatBubble = messageDiv.querySelector('.chat-bubble');
+            const parsedContent = marked.parse(content);
+            chatBubble.innerHTML = DOMPurify.sanitize(parsedContent);
+            if (isFinal && chatId) {
+                messageDiv.dataset.chatId = chatId;
+            }
+        }
+        container.scrollTop = container.scrollHeight;
+    }
+
+    function escapeHtml(unsafe) {
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+});
+</script>
+{% endblock %}
